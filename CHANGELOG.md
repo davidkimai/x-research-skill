@@ -1,5 +1,26 @@
 # Changelog
 
+## v2.2.0 (2026-02-08)
+
+### Added
+- **`--quick` mode** — Smarter, cheaper searches. Single page, auto noise filtering (`-is:retweet -is:reply`), 1hr cache TTL. Designed for fast pulse checks.
+- **`--from <username>`** — Shorthand for `from:username` queries. `search "BNKR" --from voidcider` instead of typing the full operator.
+- **`--quality` flag** — Filters out low-engagement tweets (≥10 likes). Applied post-fetch since `min_faves` isn't available on Basic tier.
+- **Cost display on all searches** — Every search now shows estimated API cost: `📊 N tweets read · est. cost ~$X`
+
+### Changed
+- README cleaned up — removed duplicate cost section, added Quick Mode and Cost docs
+- Cache supports variable TTL (1hr in quick mode, 15min default)
+
+## v2.1.0 (2026-02-08)
+
+### Added
+- **`--since` time filter** — search only recent tweets: `--since 1h`, `--since 3h`, `--since 30m`, `--since 1d`
+  - Accepts shorthand (`1h`, `30m`, `2d`) or ISO 8601 timestamps
+  - Great for monitoring during catalysts or checking what just dropped
+- Minutes support (`30m`, `15m`) in addition to hours and days
+- Cache keys now include time filter to prevent stale results across different time ranges
+
 ## v2.0.0 (2026-02-08)
 
 ### Added
