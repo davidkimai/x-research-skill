@@ -1,0 +1,27 @@
+{
+  "name": "x-research",
+  "version": "1.0.0",
+  "description": "> **Fork of [rohunvora/x-research-skill](https://github.com/rohunvora/x-research-skill)** — adapted to use [Composio](https://composio.dev) instead of a direct X API bearer token. Same functionality, zero API cost.",
+  "main": "index.js",
+  "directories": {
+    "lib": "lib"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xBenJamminx/x-research-skill.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/xBenJamminx/x-research-skill/issues"
+  },
+  "homepage": "https://github.com/xBenJamminx/x-research-skill#readme",
+  "dependencies": {
+    "composio-core": "^0.5.39"
+  }
+}

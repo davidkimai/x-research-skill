@@ -1,34 +1,46 @@
 /**
  * X API wrapper via Composio -- search, threads, profiles, single tweets.
- * Uses Composio TWITTER_RECENT_SEARCH instead of direct X API bearer token.
- * Zero API cost, same data format.
+ * Uses Composio SDK for Twitter API access.
+ * Zero API cost via Composio free tier.
  */
 
-import { readFileSync } from "fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync } from "fs";
+import { join, dirname } from "path";
 
-const COMPOSIO_BASE = "https://backend.composio.dev/api";
-const RATE_DELAY_MS = 500; // be nice to Composio
+const CACHE_DIR = join(dirname(process.cwd()), "data", "cache");
+const WATCHLIST_FILE = join(dirname(process.cwd()), "data", "watchlist.json");
+
+// Ensure cache directory exists
+if (!existsSync(CACHE_DIR)) {
+  mkdirSync(CACHE_DIR, { recursive: true });
+}
 
 function getComposioKey(): string {
   if (process.env.COMPOSIO_API_KEY) return process.env.COMPOSIO_API_KEY;
-
+  
   // Try .openclaw/.env
   try {
     const envFile = readFileSync("/root/.openclaw/.env", "utf-8");
     const match = envFile.match(/COMPOSIO_API_KEY=["']?([^"'\n]+)/);
     if (match) return match[1];
   } catch {}
-
-  throw new Error("COMPOSIO_API_KEY not found in env or /root/.openclaw/.env");
+  
+  throw new Error("COMPOSIO_API_KEY not found. Set COMPOSIO_API_KEY in your shell or ~/.openclaw/.env");
 }
 
-// Ben's main account connection (default entity)
+// Get connection ID from env or use default
 function getConnectionId(): string {
-  return process.env.COMPOSIO_CONNECTION_ID || "1fc9b642-233c-41c0-b754-3879b85ec0bb";
+  return process.env.COMPOSIO_CONNECTION_ID || "";
 }
 
-async function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
+// Get app/toolkit name (e.g., TWITTER)
+function getAppName(): string {
+  return process.env.COMPOSIO_APP_NAME || "TWITTER";
+}
+
+// Get entity/user ID for the API
+function getEntityId(): string {
+  return process.env.COMPOSIO_USER_ID || "";
 }
 
 export interface Tweet {
@@ -53,91 +65,112 @@ export interface Tweet {
   tweet_url: string;
 }
 
-interface ComposioResult {
-  data?: {
-    data?: any[];
-    includes?: { users?: any[] };
-    meta?: { next_token?: string; result_count?: number };
-  };
-  successful?: boolean;
+interface ComposioResponse {
+  data?: any;
+  success?: boolean;
   error?: string;
 }
 
-function parseTweets(raw: any): Tweet[] {
-  const data = raw?.data || raw;
-  const tweets = Array.isArray(data) ? data : data?.data || [];
-  if (!Array.isArray(tweets) || tweets.length === 0) return [];
+interface TwitterUser {
+  id: string;
+  username: string;
+  name: string;
+  description?: string;
+  public_metrics?: {
+    followers_count: number;
+    following_count: number;
+    tweet_count: number;
+  };
+}
 
-  // Build user lookup from includes
-  const users: Record<string, any> = {};
-  const includes = raw?.includes || raw?.data?.includes || {};
-  for (const u of includes?.users || []) {
+interface TweetResponse {
+  data?: any;
+  includes?: { users?: TwitterUser[] };
+  meta?: { next_token?: string; result_count?: number };
+}
+
+function parseTweet(t: any, users: Record<string, TwitterUser> = {}): Tweet {
+  const u = users[t.author_id] || {};
+  const m = t.public_metrics || {};
+  return {
+    id: t.id,
+    text: t.text,
+    author_id: t.author_id,
+    username: u.username || "?",
+    name: u.name || "?",
+    created_at: t.created_at,
+    conversation_id: t.conversation_id || t.id,
+    metrics: {
+      likes: m.like_count || 0,
+      retweets: m.retweet_count || 0,
+      replies: m.reply_count || 0,
+      quotes: m.quote_count || 0,
+      impressions: m.impression_count || 0,
+      bookmarks: m.bookmark_count || 0,
+    },
+    urls: (t.entities?.urls || []).map((u: any) => u.expanded_url).filter(Boolean),
+    mentions: (t.entities?.mentions || []).map((m: any) => m.username).filter(Boolean),
+    hashtags: (t.entities?.hashtags || []).map((h: any) => h.tag).filter(Boolean),
+    tweet_url: `https://x.com/${u.username || "?"}/status/${t.id}`,
+  };
+}
+
+function parseTweets(response: TweetResponse): Tweet[] {
+  const tweets = response.data || [];
+  if (!Array.isArray(tweets) || tweets.length === 0) return [];
+  
+  const users: Record<string, TwitterUser> = {};
+  for (const u of response.includes?.users || []) {
     users[u.id] = u;
   }
-
-  return tweets.map((t: any) => {
-    const u = users[t.author_id] || {};
-    const m = t.public_metrics || {};
-    return {
-      id: t.id,
-      text: t.text,
-      author_id: t.author_id,
-      username: u.username || "?",
-      name: u.name || "?",
-      created_at: t.created_at,
-      conversation_id: t.conversation_id || t.id,
-      metrics: {
-        likes: m.like_count || 0,
-        retweets: m.retweet_count || 0,
-        replies: m.reply_count || 0,
-        quotes: m.quote_count || 0,
-        impressions: m.impression_count || 0,
-        bookmarks: m.bookmark_count || 0,
-      },
-      urls: (t.entities?.urls || [])
-        .map((u: any) => u.expanded_url)
-        .filter(Boolean),
-      mentions: (t.entities?.mentions || [])
-        .map((m: any) => m.username)
-        .filter(Boolean),
-      hashtags: (t.entities?.hashtags || [])
-        .map((h: any) => h.tag)
-        .filter(Boolean),
-      tweet_url: `https://x.com/${u.username || "?"}/status/${t.id}`,
-    };
-  });
+  
+  return tweets.map((t: any) => parseTweet(t, users));
 }
 
 /**
- * Execute a Composio Twitter action.
+ * Execute a Composio Twitter action using the v2 API format.
  */
-async function composioExec(action: string, params: Record<string, any>): Promise<any> {
+async function composioExec(action: string, params: Record<string, any>): Promise<TweetResponse> {
   const key = getComposioKey();
   const connId = getConnectionId();
-
-  const res = await fetch(`${COMPOSIO_BASE}/v2/actions/${action}/execute`, {
+  const appName = getAppName();
+  const entityId = getEntityId();
+  
+  const body: any = {
+    input: params,
+  };
+  
+  // Use connected account ID if available, otherwise use app name + entity ID
+  if (connId) {
+    body.connectedAccountId = connId;
+  } else {
+    body.appName = appName;
+    if (entityId) {
+      body.entityId = entityId;
+    }
+  }
+  
+  const res = await fetch("https://backend.composio.dev/api/v2/actions/" + action + "/execute", {
     method: "POST",
     headers: {
       "x-api-key": key,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      connectedAccountId: connId,
-      input: params,
-    }),
+    body: JSON.stringify(body),
   });
-
+  
   if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Composio ${res.status}: ${body.slice(0, 200)}`);
+    const errorText = await res.text();
+    throw new Error(`Composio ${res.status}: ${errorText.slice(0, 300)}`);
   }
-
-  const result = await res.json() as ComposioResult;
-  if (result.error) {
+  
+  const result = await res.json() as ComposioResponse;
+  
+  if (!result.success && result.error) {
     throw new Error(`Composio error: ${result.error}`);
   }
-
-  return result.data || result;
+  
+  return result.data as TweetResponse;
 }
 
 /**
@@ -148,13 +181,10 @@ function parseSince(since: string): string | null {
   if (match) {
     const num = parseInt(match[1]);
     const unit = match[2];
-    const ms =
-      unit === "m" ? num * 60_000 :
-      unit === "h" ? num * 3_600_000 :
-      num * 86_400_000;
+    const ms = unit === "m" ? num * 60_000 : unit === "h" ? num * 3_600_000 : num * 86_400_000;
     return new Date(Date.now() - ms).toISOString();
   }
-
+  
   if (since.includes("T") || since.includes("-")) {
     try {
       return new Date(since).toISOString();
@@ -162,7 +192,7 @@ function parseSince(since: string): string | null {
       return null;
     }
   }
-
+  
   return null;
 }
 
@@ -178,42 +208,43 @@ export async function search(
     since?: string;
   } = {}
 ): Promise<Tweet[]> {
-  const maxResults = Math.max(Math.min(opts.maxResults || 100, 100), 10);
+  // Composio requires max_results >= 10
+  const maxResults = Math.max(opts.maxResults || 10, 10);
   const pages = opts.pages || 1;
   const sort = opts.sortOrder || "relevancy";
-
+  
   let allTweets: Tweet[] = [];
   let nextToken: string | undefined;
-
+  
   for (let page = 0; page < pages; page++) {
     const params: Record<string, any> = {
       query,
       max_results: maxResults,
       sort_order: sort,
-      tweet__fields: ["created_at", "public_metrics", "author_id", "conversation_id", "entities"],
+      tweet_fields: ["created_at", "public_metrics", "author_id", "conversation_id", "entities"],
       expansions: ["author_id"],
-      user__fields: ["username", "name", "public_metrics", "description"],
+      user_fields: ["username", "name", "public_metrics", "description"],
     };
-
+    
     if (opts.since) {
       const startTime = parseSince(opts.since);
       if (startTime) params.start_time = startTime;
     }
-
+    
     if (nextToken) {
       params.next_token = nextToken;
     }
-
+    
     const result = await composioExec("TWITTER_RECENT_SEARCH", params);
     const tweets = parseTweets(result);
     allTweets.push(...tweets);
-
+    
     // Check for pagination
-    nextToken = result?.meta?.next_token || result?.data?.meta?.next_token;
+    nextToken = result.meta?.next_token;
     if (!nextToken) break;
-    if (page < pages - 1) await sleep(RATE_DELAY_MS);
+    if (page < pages - 1) await new Promise(r => setTimeout(r, 500));
   }
-
+  
   return allTweets;
 }
 
@@ -225,11 +256,7 @@ export async function thread(
   opts: { pages?: number } = {}
 ): Promise<Tweet[]> {
   const query = `conversation_id:${conversationId}`;
-  const tweets = await search(query, {
-    pages: opts.pages || 2,
-    sortOrder: "recency",
-  });
-  return tweets;
+  return search(query, { pages: opts.pages || 2, sortOrder: "recency" });
 }
 
 /**
@@ -245,38 +272,20 @@ export async function profile(
     maxResults: Math.min(opts.count || 20, 100),
     sortOrder: "recency",
   });
-
-  // Extract user info from first tweet if available
+  
   const user = tweets.length > 0
     ? { username: tweets[0].username, name: tweets[0].name }
     : { username, name: username };
-
+  
   return { user, tweets };
 }
 
 /**
  * Fetch a single tweet by ID.
- * Uses search with the tweet ID as a workaround since Composio
- * may not expose the single tweet lookup endpoint.
  */
 export async function getTweet(tweetId: string): Promise<Tweet | null> {
-  // Search for the specific tweet by conversation_id or url
   const tweets = await search(tweetId, { maxResults: 10 });
   return tweets.find(t => t.id === tweetId) || tweets[0] || null;
-}
-
-/**
- * Look up a user by username via Composio.
- */
-export async function userLookup(username: string): Promise<any> {
-  try {
-    const result = await composioExec("TWITTER_USER_LOOKUP_ME", {});
-    return result;
-  } catch {
-    // Fallback: search for user's tweets and extract info
-    const { user } = await profile(username, { count: 1 });
-    return user;
-  }
 }
 
 /**
@@ -313,4 +322,23 @@ export function dedupe(tweets: Tweet[]): Tweet[] {
     seen.add(t.id);
     return true;
   });
+}
+
+/**
+ * Get watchlist.
+ */
+export function getWatchlist(): { username: string; note?: string }[] {
+  try {
+    const data = JSON.parse(readFileSync(WATCHLIST_FILE, "utf-8"));
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Save watchlist.
+ */
+export function saveWatchlist(watchlist: { username: string; note?: string }[]): void {
+  writeFileSync(WATCHLIST_FILE, JSON.stringify(watchlist, null, 2));
 }
