@@ -1,7 +1,7 @@
 ---
 name: x-research
 description: >
-  X/Twitter research agent powered by Composio (zero API cost).
+  X/Twitter research agent powered by Bird CLI (free) or Composio (fallback).
   Searches X for real-time perspectives, discussions, product feedback,
   breaking news, and expert opinions. Supports reply monitoring,
   profile analysis, thread following, and watchlist tracking.
@@ -14,7 +14,7 @@ description: >
 
 # X Research
 
-Agentic research over X/Twitter via Composio. Search, follow threads, deep-dive profiles, monitor accounts -- all at zero API cost.
+Agentic research over X/Twitter via Bird CLI. Search, follow threads, deep-dive profiles, monitor accounts -- all at zero API cost.
 
 ## CLI Tool
 
@@ -22,6 +22,27 @@ All commands run from this skill directory:
 
 ```bash
 cd ~/clawd/skills/x-research
+```
+
+### Bird CLI Setup (Free - Recommended)
+
+```bash
+# Install Bird CLI (free X search, no API key needed)
+npm install -g @steipete/bird
+bird login
+
+# Bird will be used automatically when available
+# Falls back to Composio if Bird is not installed
+```
+
+### Composio Setup (Fallback)
+
+```bash
+# Create free Composio account at https://app.composio.dev
+# Connect Twitter through Composio dashboard
+export COMPOSIO_API_KEY="your-api-key"
+
+# Bird CLI is preferred, Composio used as fallback
 ```
 
 ### Search
@@ -147,7 +168,7 @@ skills/x-research/
 ├── SKILL.md           (this file)
 ├── x-search.ts        (CLI entry point)
 ├── lib/
-│   ├── api.ts         (Composio API wrapper)
+│   ├── api.ts         (Bird CLI + Composio fallback)
 │   ├── cache.ts       (file-based cache, 15min TTL)
 │   └── format.ts      (Telegram + markdown formatters)
 ├── data/
@@ -157,7 +178,16 @@ skills/x-research/
     └── x-api.md        (X API endpoint reference)
 ```
 
+## Bird CLI vs Composio
+
+| Feature | Bird CLI | Composio |
+|---------|----------|----------|
+| Cost | Free | Free tier (20K calls/mo) |
+| API Key | No | Yes (Composio) |
+| Auth | `bird login` | Twitter OAuth via Composio |
+| Priority | Primary | Fallback |
+
 ## Credits
 
 Forked from [rohunvora/x-research-skill](https://github.com/rohunvora/x-research-skill).
-Adapted to use Composio instead of X API bearer token for zero-cost operation.
+Adapted to use Bird CLI for free X search with Composio fallback.
